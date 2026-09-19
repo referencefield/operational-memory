@@ -251,6 +251,91 @@ on:
         result = self.run_validator(root)
         self.assert_fails_with(result, "must run on workflow_dispatch")
 
+    def test_active_current_decision_reference_passes(self) -> None:
+        root = self.make_copy()
+        current_path = root / "CURRENT.md"
+        current_path.write_text(
+            current_path.read_text(encoding="utf-8")
+            + "\n## Explicit decision reference test\n\nCurrent authority: D-101.\n",
+            encoding="utf-8",
+        )
+
+        decisions_path = root / "DECISIONS.md"
+        decisions_path.write_text(
+            decisions_path.read_text(encoding="utf-8")
+            + """
+### D-101 — Active reference test
+
+- **Status:** active
+- **Date:** 2026-09-18
+- **Decision:** Use the active synthetic option.
+- **Why / evidence:** Regression fixture.
+- **Supersedes:** none.
+- **Superseded by:** none.
+""",
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("RESULT: PASS", output)
+
+    def test_missing_current_decision_reference_fails(self) -> None:
+        root = self.make_copy()
+        current_path = root / "CURRENT.md"
+        current_path.write_text(
+            current_path.read_text(encoding="utf-8")
+            + "\n## Explicit decision reference test\n\nCurrent authority: D-998.\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(
+            result,
+            "CURRENT.md references missing active decision D-998 in DECISIONS.md",
+        )
+
+    def test_superseded_current_decision_reference_fails(self) -> None:
+        root = self.make_copy()
+        current_path = root / "CURRENT.md"
+        current_path.write_text(
+            current_path.read_text(encoding="utf-8")
+            + "\n## Explicit decision reference test\n\nCurrent authority: D-201.\n",
+            encoding="utf-8",
+        )
+
+        decisions_path = root / "DECISIONS.md"
+        decisions_path.write_text(
+            decisions_path.read_text(encoding="utf-8")
+            + """
+### D-201 — Superseded reference test
+
+- **Status:** superseded
+- **Date:** 2026-09-18
+- **Decision:** Use the old synthetic option.
+- **Why / evidence:** Regression fixture.
+- **Supersedes:** none.
+- **Superseded by:** D-202.
+
+### D-202 — Active replacement test
+
+- **Status:** active
+- **Date:** 2026-09-18
+- **Decision:** Use the replacement synthetic option.
+- **Why / evidence:** Regression fixture.
+- **Supersedes:** D-201.
+- **Superseded by:** none.
+""",
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(
+            result,
+            "CURRENT.md references non-active decision D-201 in DECISIONS.md",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

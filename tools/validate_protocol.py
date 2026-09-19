@@ -220,6 +220,27 @@ def check_lifecycle_consistency(path: Path, prefix: str) -> None:
                 )
 
 
+def check_current_decision_references(current_path: Path, decisions_path: Path) -> None:
+    """Check only explicit D-### references in current state against same-scope decisions."""
+    current_text = read_text(current_path)
+    records = entry_blocks(read_text(decisions_path), "D")
+    for decision_id in sorted(set(referenced_ids(current_text, "D"))):
+        block = records.get(decision_id)
+        if block is None or is_example_block(block):
+            error(
+                f"{current_path.relative_to(ROOT)} references missing active decision "
+                f"{decision_id} in {decisions_path.relative_to(ROOT)}"
+            )
+            continue
+
+        status = field_value(block, "Status").lower()
+        if not status.startswith("active"):
+            error(
+                f"{current_path.relative_to(ROOT)} references non-active decision "
+                f"{decision_id} in {decisions_path.relative_to(ROOT)}"
+            )
+
+
 def active_count(path: Path, prefix: str) -> int:
     count = 0
     for block in entry_blocks(read_text(path), prefix).values():
@@ -683,6 +704,10 @@ def main() -> int:
                 project_root,
             )
 
+    current_path = confined_path(
+        str(global_map.get("current", "CURRENT.md")),
+        "PROTOCOL.yaml global.current",
+    )
     decision_path = confined_path(
         str(global_map.get("decisions", "DECISIONS.md")),
         "PROTOCOL.yaml global.decisions",
@@ -693,10 +718,19 @@ def main() -> int:
     )
     decision_paths = [decision_path] if decision_path is not None else []
     knowledge_paths = [knowledge_path] if knowledge_path is not None else []
+    current_decision_scopes: list[tuple[Path, Path]] = []
+    if current_path is not None and decision_path is not None:
+        current_decision_scopes.append((current_path, decision_path))
+
     for slug in sorted(actual_projects):
         project_root = confined_path(slug, f"project directory projects/{slug}", projects_root)
         if project_root is None:
             continue
+        project_current = confined_path(
+            "CURRENT.md",
+            f"projects/{slug} current state",
+            project_root,
+        )
         project_decisions = confined_path(
             "DECISIONS.md",
             f"projects/{slug} decisions",
@@ -711,12 +745,18 @@ def main() -> int:
             decision_paths.append(project_decisions)
         if project_knowledge is not None:
             knowledge_paths.append(project_knowledge)
+        if project_current is not None and project_decisions is not None:
+            current_decision_scopes.append((project_current, project_decisions))
 
     for path in decision_paths:
         if path.is_file():
             check_unique_ids(path, "D")
             check_references(path, "D")
             check_lifecycle_consistency(path, "D")
+
+    for current_state, decisions in current_decision_scopes:
+        if current_state.is_file() and decisions.is_file():
+            check_current_decision_references(current_state, decisions)
     for path in knowledge_paths:
         if path.is_file():
             check_unique_ids(path, "K")
