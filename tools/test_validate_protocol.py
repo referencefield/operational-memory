@@ -92,6 +92,165 @@ class ValidatorRegressionTests(unittest.TestCase):
             "compatibility.minimum_supported_chatgpt_plan must be 'plus'",
         )
 
+    def test_absolute_manifest_path_fails(self) -> None:
+        root = self.make_copy()
+        outside = root.parent / "outside-current.md"
+        outside.write_text("outside\n", encoding="utf-8")
+
+        manifest_path = root / "PROTOCOL.yaml"
+        text = manifest_path.read_text(encoding="utf-8")
+        needle = "  current: CURRENT.md"
+        self.assertIn(needle, text)
+        manifest_path.write_text(
+            text.replace(needle, f"  current: {outside}", 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(
+            result,
+            "PROTOCOL.yaml global.current must be repository-relative",
+        )
+
+    def test_parent_traversal_manifest_path_fails(self) -> None:
+        root = self.make_copy()
+        outside = root.parent / "outside-current.md"
+        outside.write_text("outside\n", encoding="utf-8")
+
+        manifest_path = root / "PROTOCOL.yaml"
+        text = manifest_path.read_text(encoding="utf-8")
+        needle = "  current: CURRENT.md"
+        self.assertIn(needle, text)
+        manifest_path.write_text(
+            text.replace(needle, "  current: ../outside-current.md", 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(
+            result,
+            "PROTOCOL.yaml global.current must not contain parent traversal",
+        )
+
+    def test_symlink_escape_manifest_path_fails(self) -> None:
+        root = self.make_copy()
+        outside = root.parent / "outside-current.md"
+        outside.write_text("outside\n", encoding="utf-8")
+        link = root / "ESCAPE-CURRENT.md"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            self.skipTest(f"symlink creation unavailable: {exc}")
+
+        manifest_path = root / "PROTOCOL.yaml"
+        text = manifest_path.read_text(encoding="utf-8")
+        needle = "  current: CURRENT.md"
+        self.assertIn(needle, text)
+        manifest_path.write_text(
+            text.replace(needle, "  current: ESCAPE-CURRENT.md", 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(
+            result,
+            "PROTOCOL.yaml global.current resolves outside repository",
+        )
+
+    def test_trigger_only_workflow_fails(self) -> None:
+        root = self.make_copy()
+        workflow_path = root / ".github" / "workflows" / "protocol-validation.yml"
+        workflow_path.write_text(
+            """name: Trigger-only validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+""",
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(result, "must define at least one validation job")
+
+    def test_missing_workflow_contents_read_fails(self) -> None:
+        root = self.make_copy()
+        workflow_path = root / ".github" / "workflows" / "protocol-validation.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+        needle = "permissions:\n  contents: read\n\n"
+        self.assertIn(needle, text)
+        workflow_path.write_text(text.replace(needle, "", 1), encoding="utf-8")
+
+        result = self.run_validator(root)
+        self.assert_fails_with(result, "must declare top-level permissions.contents: read")
+
+    def test_missing_workflow_checkout_fails(self) -> None:
+        root = self.make_copy()
+        workflow_path = root / ".github" / "workflows" / "protocol-validation.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+        needle = "        uses: actions/checkout@v7\n"
+        self.assertIn(needle, text)
+        workflow_path.write_text(text.replace(needle, "", 1), encoding="utf-8")
+
+        result = self.run_validator(root)
+        self.assert_fails_with(result, "validation job must check out the repository")
+
+    def test_missing_pinned_validator_dependency_fails(self) -> None:
+        root = self.make_copy()
+        workflow_path = root / ".github" / "workflows" / "protocol-validation.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+        needle = '        run: python -m pip install "PyYAML==6.0.2"\n'
+        self.assertIn(needle, text)
+        workflow_path.write_text(
+            text.replace(needle, "        run: python -m pip install PyYAML\n", 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(result, "validation job must install pinned PyYAML==6.0.2")
+
+    def test_missing_regression_test_step_fails(self) -> None:
+        root = self.make_copy()
+        workflow_path = root / ".github" / "workflows" / "protocol-validation.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+        needle = "        run: python tools/test_validate_protocol.py\n"
+        self.assertIn(needle, text)
+        workflow_path.write_text(
+            text.replace(needle, '        run: python -c "print(1)"\n', 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(result, "validation job must run tools/test_validate_protocol.py")
+
+    def test_missing_structural_validator_step_fails(self) -> None:
+        root = self.make_copy()
+        workflow_path = root / ".github" / "workflows" / "protocol-validation.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+        needle = "        run: python tools/validate_protocol.py\n"
+        self.assertIn(needle, text)
+        workflow_path.write_text(
+            text.replace(needle, '        run: python -c "print(2)"\n', 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_validator(root)
+        self.assert_fails_with(result, "validation job must run tools/validate_protocol.py")
+
+    def test_missing_manual_dispatch_trigger_fails(self) -> None:
+        root = self.make_copy()
+        workflow_path = root / ".github" / "workflows" / "protocol-validation.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+        needle = "  workflow_dispatch:\n"
+        self.assertIn(needle, text)
+        workflow_path.write_text(text.replace(needle, "", 1), encoding="utf-8")
+
+        result = self.run_validator(root)
+        self.assert_fails_with(result, "must run on workflow_dispatch")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

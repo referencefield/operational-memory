@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Iterable
 
 try:
@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
     raise SystemExit(2)
 
 ROOT = Path(__file__).resolve().parents[1]
+ROOT_RESOLVED = ROOT.resolve()
 ERRORS: list[str] = []
 WARNINGS: list[str] = []
 LEGACY_REPOSITORY_SLUG = "chatgpt" + "-operational-memory"
@@ -44,9 +45,47 @@ def warn(message: str) -> None:
     WARNINGS.append(message)
 
 
-def require_file(path: str, role: str = "required file") -> Path:
-    target = ROOT / path
+def confined_path(path: str, role: str, base: Path = ROOT) -> Path | None:
+    raw = str(path).strip()
+    if not raw:
+        error(f"missing {role}")
+        return None
+
+    posix = PurePosixPath(raw)
+    windows = PureWindowsPath(raw)
+    if posix.is_absolute() or windows.is_absolute():
+        error(f"{role} must be repository-relative: {raw}")
+        return None
+    if ".." in posix.parts or ".." in windows.parts:
+        error(f"{role} must not contain parent traversal: {raw}")
+        return None
+
+    base_resolved = base.resolve(strict=False)
+    if not base_resolved.is_relative_to(ROOT_RESOLVED):
+        error(f"{role} base resolves outside repository: {base}")
+        return None
+
+    target = (base_resolved / raw).resolve(strict=False)
+    if not target.is_relative_to(ROOT_RESOLVED):
+        error(f"{role} resolves outside repository: {raw}")
+        return None
+    return target
+
+
+def require_file(path: str, role: str = "required file", base: Path = ROOT) -> Path:
+    target = confined_path(path, role, base)
+    if target is None:
+        return ROOT / "__INVALID_PATH__"
     if not target.is_file():
+        error(f"missing {role}: {path}")
+    return target
+
+
+def require_directory(path: str, role: str = "required directory", base: Path = ROOT) -> Path:
+    target = confined_path(path, role, base)
+    if target is None:
+        return ROOT / "__INVALID_DIRECTORY__"
+    if not target.is_dir():
         error(f"missing {role}: {path}")
     return target
 
@@ -60,7 +99,15 @@ def read_text(path: Path) -> str:
 
 def text_files() -> Iterable[Path]:
     for path in ROOT.rglob("*"):
-        if not path.is_file() or ".git" in path.parts:
+        if ".git" in path.parts:
+            continue
+        resolved = path.resolve(strict=False)
+        if not resolved.is_relative_to(ROOT_RESOLVED):
+            error(
+                f"repository path resolves outside repository: {path.relative_to(ROOT)}"
+            )
+            continue
+        if not path.is_file():
             continue
         if path.suffix.lower() in TEXT_SUFFIXES:
             yield path
@@ -185,7 +232,9 @@ def active_count(path: Path, prefix: str) -> int:
 
 
 def budget_bytes(path: str, limit: int, label: str) -> None:
-    target = ROOT / path
+    target = confined_path(path, f"soft budget path for {label}")
+    if target is None:
+        return
     if target.is_file() and target.stat().st_size > limit:
         warn(f"soft budget crossed: {label} is {target.stat().st_size} bytes > {limit}")
 
@@ -219,6 +268,60 @@ def check_removed_or_ambiguous_product_wording() -> None:
             )
 
 
+def check_manifest_path_confinement(manifest: dict) -> None:
+    template_source = manifest.get("template_source", {}) or {}
+    compatibility = manifest.get("compatibility", {}) or {}
+    activation = manifest.get("activation", {}) or {}
+    collaboration = manifest.get("collaboration", {}) or {}
+    validation = manifest.get("validation", {}) or {}
+    projects_cfg = manifest.get("projects", {}) or {}
+
+    scalar_paths = (
+        ("front_door", manifest.get("front_door")),
+        ("template_source.manifest", template_source.get("manifest")),
+        ("compatibility.codex_bootloader", compatibility.get("codex_bootloader")),
+        ("activation.diagnostic_file", activation.get("diagnostic_file")),
+        ("collaboration.companion", collaboration.get("companion")),
+        ("validation.script", validation.get("script")),
+        ("validation.workflow", validation.get("workflow")),
+    )
+    for key, value in scalar_paths:
+        if value is not None:
+            confined_path(str(value), f"PROTOCOL.yaml {key}")
+
+    for key, value in (manifest.get("human_docs", {}) or {}).items():
+        confined_path(str(value), f"PROTOCOL.yaml human_docs.{key}")
+
+    for key, value in (manifest.get("global", {}) or {}).items():
+        confined_path(str(value), f"PROTOCOL.yaml global.{key}")
+
+    projects_root_rel = projects_cfg.get("root")
+    template_rel = projects_cfg.get("template")
+    if projects_root_rel is not None:
+        confined_path(str(projects_root_rel), "PROTOCOL.yaml projects.root")
+    template_root = None
+    if template_rel is not None:
+        template_root = confined_path(
+            str(template_rel),
+            "PROTOCOL.yaml projects.template",
+        )
+
+    if template_root is not None:
+        project_front_door = projects_cfg.get("front_door")
+        if project_front_door is not None:
+            confined_path(
+                str(project_front_door),
+                "PROTOCOL.yaml projects.front_door",
+                template_root,
+            )
+        for index, filename in enumerate(projects_cfg.get("required_files", []) or []):
+            confined_path(
+                str(filename),
+                f"PROTOCOL.yaml projects.required_files[{index}]",
+                template_root,
+            )
+
+
 def check_validation_workflow(manifest: dict) -> None:
     validation = manifest.get("validation", {}) or {}
     workflow_rel = str(validation.get("workflow", "")).strip()
@@ -231,6 +334,8 @@ def check_validation_workflow(manifest: dict) -> None:
         error("PROTOCOL.yaml validation.runs_on_pull_request must be true")
     if validation.get("runs_on_main_push") is not True:
         error("PROTOCOL.yaml validation.runs_on_main_push must be true")
+    if validation.get("manual_dispatch_available") is not True:
+        error("PROTOCOL.yaml validation.manual_dispatch_available must be true")
     if not workflow_path.is_file():
         return
 
@@ -239,13 +344,14 @@ def check_validation_workflow(manifest: dict) -> None:
         r"(?ms)^on:\s*\n(?P<body>.*?)(?=^[^\s#])",
         workflow_text,
     )
+    trigger_block = on_match.group("body") if on_match else ""
     if not on_match:
         error(f"{workflow_rel} is missing a readable top-level on: trigger block")
-        return
 
-    trigger_block = on_match.group("body")
     if not re.search(r"(?m)^  pull_request:\s*$", trigger_block):
         error(f"{workflow_rel} must run on pull_request")
+    if not re.search(r"(?m)^  workflow_dispatch:\s*$", trigger_block):
+        error(f"{workflow_rel} must run on workflow_dispatch")
 
     push_match = re.search(
         r"(?ms)^  push:\s*\n(?P<body>(?: {4,}.*\n?)*)",
@@ -253,14 +359,98 @@ def check_validation_workflow(manifest: dict) -> None:
     )
     if not push_match:
         error(f"{workflow_rel} must run on push to canonical main")
+    else:
+        push_block = push_match.group("body")
+        if not re.search(r"(?m)^    branches:\s*$", push_block):
+            error(f"{workflow_rel} push trigger must declare branches")
+        if not re.search(r"(?m)^      - main\s*$", push_block):
+            error(f"{workflow_rel} push trigger must include canonical main")
+
+    try:
+        workflow = yaml.load(workflow_text, Loader=yaml.BaseLoader) or {}
+    except Exception as exc:  # noqa: BLE001
+        error(f"{workflow_rel} cannot be parsed: {exc}")
+        return
+    if not isinstance(workflow, dict):
+        error(f"{workflow_rel} root must be a mapping")
         return
 
-    push_block = push_match.group("body")
-    if not re.search(r"(?m)^    branches:\s*$", push_block):
-        error(f"{workflow_rel} push trigger must declare branches")
-    if not re.search(r"(?m)^      - main\s*$", push_block):
-        error(f"{workflow_rel} push trigger must include canonical main")
+    permissions = workflow.get("permissions")
+    if not isinstance(permissions, dict) or permissions.get("contents") != "read":
+        error(f"{workflow_rel} must declare top-level permissions.contents: read")
 
+    jobs = workflow.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        error(f"{workflow_rel} must define at least one validation job")
+        return
+
+    feature_seen = {
+        "checkout": False,
+        "pinned_dependency": False,
+        "regression_tests": False,
+        "structural_validator": False,
+    }
+    complete_job = False
+
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            continue
+
+        has_checkout = False
+        has_pinned_dependency = False
+        has_regression_tests = False
+        has_structural_validator = False
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            uses = str(step.get("uses", ""))
+            run = str(step.get("run", ""))
+
+            if uses.startswith("actions/checkout@"):
+                has_checkout = True
+            if re.search(
+                r"(?i)python\s+-m\s+pip\s+install[^\n]*PyYAML==6\.0\.2",
+                run,
+            ):
+                has_pinned_dependency = True
+            if re.search(
+                r"(?m)^\s*python\s+tools/test_validate_protocol\.py(?:\s|$)",
+                run,
+            ):
+                has_regression_tests = True
+            if re.search(
+                r"(?m)^\s*python\s+tools/validate_protocol\.py(?:\s|$)",
+                run,
+            ):
+                has_structural_validator = True
+
+        feature_seen["checkout"] |= has_checkout
+        feature_seen["pinned_dependency"] |= has_pinned_dependency
+        feature_seen["regression_tests"] |= has_regression_tests
+        feature_seen["structural_validator"] |= has_structural_validator
+
+        if (
+            has_checkout
+            and has_pinned_dependency
+            and has_regression_tests
+            and has_structural_validator
+        ):
+            complete_job = True
+
+    if not feature_seen["checkout"]:
+        error(f"{workflow_rel} validation job must check out the repository")
+    if not feature_seen["pinned_dependency"]:
+        error(f"{workflow_rel} validation job must install pinned PyYAML==6.0.2")
+    if not feature_seen["regression_tests"]:
+        error(f"{workflow_rel} validation job must run tools/test_validate_protocol.py")
+    if not feature_seen["structural_validator"]:
+        error(f"{workflow_rel} validation job must run tools/validate_protocol.py")
+    if all(feature_seen.values()) and not complete_job:
+        error(f"{workflow_rel} required validation work must occur in one job")
 
 def check_documented_bootloader(manifest: dict) -> None:
     bootloader = str(manifest.get("custom_instruction_template", "")).strip()
@@ -319,11 +509,17 @@ def registry_slugs(registry_path: Path) -> set[str]:
 def project_dirs(root: Path) -> set[str]:
     if not root.is_dir():
         return set()
-    return {
-        item.name
-        for item in root.iterdir()
-        if item.is_dir() and item.name != "_TEMPLATE" and not item.name.startswith(".")
-    }
+    projects: set[str] = set()
+    for item in root.iterdir():
+        if item.name == "_TEMPLATE" or item.name.startswith("."):
+            continue
+        resolved = item.resolve(strict=False)
+        if not resolved.is_relative_to(ROOT_RESOLVED):
+            error(f"project directory resolves outside repository: {item.relative_to(ROOT)}")
+            continue
+        if item.is_dir():
+            projects.add(item.name)
+    return projects
 
 
 def main() -> int:
@@ -332,6 +528,7 @@ def main() -> int:
         print_results()
         return 1
 
+    check_manifest_path_confinement(manifest)
     check_legacy_project_naming()
     check_removed_or_ambiguous_product_wording()
     check_validation_workflow(manifest)
@@ -453,18 +650,20 @@ def main() -> int:
     template_rel = str(projects_cfg.get("template", "projects/_TEMPLATE"))
     required_project_files = list(projects_cfg.get("required_files", []))
 
-    projects_root = ROOT / projects_root_rel
-    template_root = ROOT / template_rel
-    if not projects_root.is_dir():
-        error(f"missing projects root: {projects_root_rel}")
-    if not template_root.is_dir():
-        error(f"missing project template: {template_rel}")
+    projects_root = require_directory(projects_root_rel, "projects root")
+    template_root = require_directory(template_rel, "project template")
 
     for filename in required_project_files:
-        if not (template_root / filename).is_file():
-            error(f"project template missing required file: {filename}")
+        require_file(
+            str(filename),
+            f"project template required file {filename}",
+            template_root,
+        )
 
-    registry_path = ROOT / str(global_map.get("projects", "PROJECTS.md"))
+    registry_path = require_file(
+        str(global_map.get("projects", "PROJECTS.md")),
+        "project registry",
+    )
     registered = registry_slugs(registry_path) if registry_path.is_file() else set()
     actual_projects = project_dirs(projects_root)
 
@@ -474,16 +673,44 @@ def main() -> int:
         error(f"project directory is not registered in PROJECTS.md: projects/{slug}")
 
     for slug in sorted(actual_projects):
-        project_root = projects_root / slug
+        project_root = confined_path(slug, f"project directory projects/{slug}", projects_root)
+        if project_root is None:
+            continue
         for filename in required_project_files:
-            if not (project_root / filename).is_file():
-                error(f"projects/{slug} missing required file: {filename}")
+            require_file(
+                str(filename),
+                f"projects/{slug} required file {filename}",
+                project_root,
+            )
 
-    decision_paths = [ROOT / str(global_map.get("decisions", "DECISIONS.md"))]
-    knowledge_paths = [ROOT / str(global_map.get("knowledge", "KNOWLEDGE.md"))]
+    decision_path = confined_path(
+        str(global_map.get("decisions", "DECISIONS.md")),
+        "PROTOCOL.yaml global.decisions",
+    )
+    knowledge_path = confined_path(
+        str(global_map.get("knowledge", "KNOWLEDGE.md")),
+        "PROTOCOL.yaml global.knowledge",
+    )
+    decision_paths = [decision_path] if decision_path is not None else []
+    knowledge_paths = [knowledge_path] if knowledge_path is not None else []
     for slug in sorted(actual_projects):
-        decision_paths.append(projects_root / slug / "DECISIONS.md")
-        knowledge_paths.append(projects_root / slug / "KNOWLEDGE.md")
+        project_root = confined_path(slug, f"project directory projects/{slug}", projects_root)
+        if project_root is None:
+            continue
+        project_decisions = confined_path(
+            "DECISIONS.md",
+            f"projects/{slug} decisions",
+            project_root,
+        )
+        project_knowledge = confined_path(
+            "KNOWLEDGE.md",
+            f"projects/{slug} knowledge",
+            project_root,
+        )
+        if project_decisions is not None:
+            decision_paths.append(project_decisions)
+        if project_knowledge is not None:
+            knowledge_paths.append(project_knowledge)
 
     for path in decision_paths:
         if path.is_file():
@@ -496,8 +723,11 @@ def main() -> int:
             check_references(path, "K")
             check_lifecycle_consistency(path, "K")
 
-    style_path = ROOT / str(global_map.get("working_style", "WORKING_STYLE.md"))
-    if style_path.is_file():
+    style_path = confined_path(
+        str(global_map.get("working_style", "WORKING_STYLE.md")),
+        "PROTOCOL.yaml global.working_style",
+    )
+    if style_path is not None and style_path.is_file():
         check_unique_ids(style_path, "WS")
         check_references(style_path, "WS")
         check_lifecycle_consistency(style_path, "WS")
@@ -546,9 +776,10 @@ def main() -> int:
             f"soft budget crossed: WORKING_STYLE.md has more than {style_limit} active entries"
         )
 
-    setup_test = ROOT / "SETUP-TEST.md"
-    if setup_test.exists():
-        warn("SETUP-TEST.md still exists; remove it after setup validation")
+    diagnostic_file = str((manifest.get("activation", {}) or {}).get("diagnostic_file", "SETUP-TEST.md"))
+    setup_test = confined_path(diagnostic_file, "PROTOCOL.yaml activation.diagnostic_file")
+    if setup_test is not None and setup_test.exists():
+        warn(f"{diagnostic_file} still exists; remove it after setup validation")
 
     print_results(version)
     return 1 if ERRORS else 0
