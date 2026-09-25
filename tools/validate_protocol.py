@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Advisory structural validator for Operational Memory.
+"""Advisory structural validator for Reference Field Operational Memory.
 
 This intentionally checks only machine-verifiable repository invariants.
 Semantic questions remain part of the ChatGPT health check described in OPERATIONS.md.
