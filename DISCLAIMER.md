@@ -1,6 +1,6 @@
 # Disclaimer
 
-Operational Memory is an independent open-source project created by **Reference Field, Inc.** It is not an OpenAI or GitHub product, and Reference Field, Inc. is not affiliated with, sponsored by, endorsed by, or acting on behalf of OpenAI or GitHub.
+Reference Field Operational Memory is an independent open-source project created by **Reference Field, Inc.** It is not an OpenAI or GitHub product, and Reference Field, Inc. is not affiliated with, sponsored by, endorsed by, or acting on behalf of OpenAI or GitHub.
 
 OpenAI, ChatGPT, Codex, GitHub, and other third-party names and marks belong to their respective owners. References to third-party products and services in this repository are descriptive only.
 
