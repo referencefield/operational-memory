@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping improve Operational Memory.
+Thank you for helping improve Reference Field Operational Memory.
 
 The project is intentionally narrow: a low-infrastructure, lay-user-friendly way to give ChatGPT explicit, user-owned operational memory in GitHub without turning the repository into an uncontrolled knowledge base or requiring an agent framework.
 
