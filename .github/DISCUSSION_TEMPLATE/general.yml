@@ -3,7 +3,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use General for open-ended conversation about Operational Memory that does not fit Q&A, Ideas, or Show and tell.
+        Use General for open-ended conversation about Reference Field Operational Memory that does not fit Q&A, Ideas, or Show and tell.
         Do not post secrets, credentials, private repository contents, or sensitive personal information.
   - type: textarea
     id: topic
