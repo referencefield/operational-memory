@@ -3,7 +3,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Share how you are using Operational Memory with ChatGPT, what you changed, or what you learned. Please keep examples sanitized.
+        Share how you are using Reference Field Operational Memory with ChatGPT, what you changed, or what you learned. Please keep examples sanitized.
   - type: textarea
     id: use_case
     attributes:
