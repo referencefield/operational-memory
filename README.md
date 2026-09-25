@@ -1,4 +1,4 @@
-# Operational Memory
+# Reference Field Operational Memory
 
 A low-infrastructure GitHub template for giving ChatGPT durable, user-owned working state across conversations: current state, decisions, durable knowledge, working preferences, routed projects, and cross-repository continuity.
 
@@ -6,7 +6,7 @@ The goal is not to make ChatGPT remember everything. It is to keep the smaller s
 
 > **A portable continuity layer for serious ongoing ChatGPT work.**
 
-Operational Memory is an independent open-source project created by **Reference Field, Inc.** It is not an OpenAI or GitHub product and is not sponsored by or endorsed by either company. See [`DISCLAIMER.md`](DISCLAIMER.md) for practical boundaries and third-party independence.
+Reference Field Operational Memory is an independent open-source project created by **Reference Field, Inc.** It is not an OpenAI or GitHub product and is not sponsored by or endorsed by either company. See [`DISCLAIMER.md`](DISCLAIMER.md) for practical boundaries and third-party independence.
 
 **Supported release baseline:** **ChatGPT Plus (currently $20/month) or a higher ChatGPT plan**, plus the installed/selected and authenticated **`@GitHub` plugin** authorized for the intended repository and exposing repository read/write actions. **Free and ChatGPT Go are unsupported by this release.** A qualifying plan alone does not establish readiness; setup verifies the actual GitHub capability before reporting READY.
 
