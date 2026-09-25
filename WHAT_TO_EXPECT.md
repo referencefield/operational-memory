@@ -1,6 +1,6 @@
 # What to Expect
 
-This page is for the person deciding whether Operational Memory is worth installing.
+This page is for the person deciding whether Reference Field Operational Memory is worth installing.
 
 ## Short version
 
